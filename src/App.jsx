@@ -1,4 +1,10 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 const PATTERNS = [
   "Sobrepensamiento / rumiación", "Evitación emocional", "Hiperfuncionamiento",
@@ -48,7 +54,6 @@ function Section({ title, children }) {
   );
 }
 
-// ── IMPORT SESSION — texto libre → IA → output clínico completo ──
 function ImportSession({ patient, onSave, onCancel }) {
   const [rawText, setRawText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -59,11 +64,11 @@ function ImportSession({ patient, onSave, onCancel }) {
   const buildPatientContext = () => {
     const sessions = patient.sessions || [];
     const sessionSummary = sessions.map((s, i) =>
-      `Sesión ${i + 1} (${s.date}): Emergió: ${s.emerged || "—"}. Patrones: ${s.patterns || "—"}. Tarea asignada: ${s.task || "—"}. Resultado tarea: ${s.taskResult || "—"}. Etapa: ${s.stage}.`
+      `Sesión ${i + 1} (${s.date}): Emergió: ${s.emerged || "—"}. Patrones: ${s.patterns || "—"}. Tarea: ${s.task || "—"}. Resultado: ${s.task_result || "—"}. Etapa: ${s.stage}.`
     ).join("\n");
-    return `PACIENTE: ${patient.name} | Edad: ${patient.age || "—"} | Etapa actual: ${patient.stage || "—"}
-Patrón predominante: ${patient.predominantPattern || "—"}
-Hipótesis inicial: ${patient.initialHypothesis || "—"}
+    return `PACIENTE: ${patient.name} | Edad: ${patient.age || "—"} | Etapa: ${patient.stage || "—"}
+Patrón: ${patient.predominant_pattern || "—"}
+Hipótesis: ${patient.initial_hypothesis || "—"}
 Sesiones previas (${sessions.length}):
 ${sessionSummary || "Primera sesión."}`;
   };
@@ -73,46 +78,21 @@ ${sessionSummary || "Primera sesión."}`;
     setLoading(true);
     setError(null);
     setResult(null);
+    const prompt = `Eres una asistente clínica especializada en TCC y regulación emocional. Procesa este texto de sesión terapéutica y genera un JSON con exactamente esta estructura (sin texto adicional, sin markdown):
+{"emerged":"qué emergió emocionalmente","patterns":"patrones clínicos observados","regulation_level":"Alta, Media o Baja","stage":"Claridad, Comprensión, Regulación o Cambio conductual","task_result":"Realizada, Parcial, No realizada, o Primera sesión","task":"tarea sugerida con objetivo clínico","notes":"hipótesis emergentes y observaciones","clinical_summary":"resumen clínico en 3-5 líneas","new_patterns":"patrones nuevos detectados","updated_hypothesis":"hipótesis actualizada","next_session_script":"guión sugerido para próxima sesión","therapeutic_warnings":"señales de alerta clínica"}
 
-    const prompt = `Eres una asistente clínica especializada en la metodología de esta terapeuta (TCC, regulación emocional, trabajo con patrones). Tu tarea es procesar el texto de una sesión terapéutica y generar un output clínico completo.
-
-CONTEXTO DEL PACIENTE:
-${buildPatientContext()}
-
-TEXTO DE LA SESIÓN (puede ser transcripción, apuntes crudos, guión, o mezcla):
-${rawText}
-
-Genera un JSON con exactamente esta estructura (sin texto adicional, sin markdown):
-{
-  "emerged": "qué emergió emocionalmente en esta sesión — emociones, reacciones, insights, contradicciones observadas",
-  "patterns": "patrones clínicos observados o reforzados en esta sesión",
-  "regulationLevel": "Alta, Media o Baja",
-  "stage": "Claridad, Comprensión, Regulación o Cambio conductual",
-  "taskResult": "Realizada, Parcial, No realizada, o Primera sesión",
-  "task": "tarea terapéutica sugerida para esta semana, con objetivo clínico explícito",
-  "notes": "hipótesis emergentes, ajustes al plan, observaciones clínicas relevantes",
-  "clinicalSummary": "resumen clínico estructurado de la sesión en 3-5 líneas",
-  "newPatterns": "patrones nuevos detectados que no estaban en sesiones anteriores",
-  "updatedHypothesis": "hipótesis clínica actualizada según lo que emergió hoy",
-  "nextSessionScript": "guión sugerido para la próxima sesión: apertura, foco, intervenciones clave, cierre",
-  "therapeuticWarnings": "señales de alerta o cuidados clínicos específicos para este momento del proceso"
-}`;
-
+CONTEXTO: ${buildPatientContext()}
+TEXTO: ${rawText}`;
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }]
-        })
+        headers: { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, messages: [{ role: "user", content: prompt }] })
       });
       const data = await res.json();
       const text = data.content?.map(i => i.text || "").join("") || "";
       const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
-      setResult(parsed);
+      setResult(JSON.parse(clean));
     } catch (err) {
       setError("Error al procesar. Intenta nuevamente.");
     } finally {
@@ -120,101 +100,64 @@ Genera un JSON con exactamente esta estructura (sin texto adicional, sin markdow
     }
   };
 
-  const confirmSave = () => {
+  const confirmSave = async () => {
     if (!result) return;
-    onSave({
-      id: Date.now().toString(),
+    await onSave({
+      patient_id: patient.id,
       date,
-      sessionNumber: (patient.sessions?.length || 0) + 1,
+      session_number: (patient.sessions?.length || 0) + 1,
       emerged: result.emerged,
       patterns: result.patterns,
-      regulationLevel: result.regulationLevel,
+      regulation_level: result.regulation_level,
       stage: result.stage,
-      taskResult: result.taskResult,
+      task_result: result.task_result,
       task: result.task,
-      notes: result.notes,
-      clinicalSummary: result.clinicalSummary,
-      newPatterns: result.newPatterns,
-      updatedHypothesis: result.updatedHypothesis,
-      nextSessionScript: result.nextSessionScript,
-      therapeuticWarnings: result.therapeuticWarnings,
-      rawText,
+      notes: result.notes + "\n\nResumen: " + result.clinical_summary + "\n\nPatrones nuevos: " + result.new_patterns + "\n\nHipótesis actualizada: " + result.updated_hypothesis + "\n\nGuión próxima sesión: " + result.next_session_script + "\n\nAlertas: " + result.therapeutic_warnings,
     });
   };
 
   return (
     <div style={{ maxWidth: "700px" }}>
       <div style={{ marginBottom: "24px" }}>
-        <div style={{ fontSize: "10px", letterSpacing: "0.2em", color: C.accent, marginBottom: "6px", textTransform: "uppercase" }}>
-          {patient.name} — Sesión {(patient.sessions?.length || 0) + 1}
-        </div>
+        <div style={{ fontSize: "10px", letterSpacing: "0.2em", color: C.accent, marginBottom: "6px", textTransform: "uppercase" }}>{patient.name} — Sesión {(patient.sessions?.length || 0) + 1}</div>
         <h3 style={{ fontSize: "20px", fontWeight: "400", color: C.text, margin: "0 0 8px" }}>Importar sesión</h3>
-        <p style={{ color: C.textMuted, fontSize: "13px", margin: 0, lineHeight: "1.6" }}>
-          Pega aquí la transcripción de Encuadrados, tus apuntes crudos, el guión, o cualquier texto de la sesión. La IA extrae y estructura todo automáticamente.
-        </p>
+        <p style={{ color: C.textMuted, fontSize: "13px", margin: 0 }}>Pega la transcripción de Encuadrados, tus apuntes o el guión. La IA estructura todo.</p>
       </div>
-
       <div style={{ marginBottom: "16px" }}>
-        <label style={S.label}>Fecha de la sesión</label>
+        <label style={S.label}>Fecha</label>
         <input type="date" style={{ ...S.input, width: "200px" }} value={date} onChange={e => setDate(e.target.value)} />
       </div>
-
       <div style={{ marginBottom: "20px" }}>
         <label style={S.label}>Texto de la sesión</label>
-        <textarea
-          style={{ ...S.input, minHeight: "220px", resize: "vertical", lineHeight: "1.7" }}
-          value={rawText}
-          onChange={e => setRawText(e.target.value)}
-          placeholder="Pega aquí la transcripción, tus apuntes, el guión, o una mezcla de todo..."
-        />
+        <textarea style={{ ...S.input, minHeight: "220px", resize: "vertical", lineHeight: "1.7" }} value={rawText} onChange={e => setRawText(e.target.value)} placeholder="Pega aquí la transcripción, apuntes o guión..." />
       </div>
-
       {!result && (
         <div style={{ display: "flex", gap: "12px" }}>
           <button style={S.ghost} onClick={onCancel}>Cancelar</button>
-          <button
-            onClick={processSession}
-            disabled={loading || !rawText.trim()}
-            style={{ ...S.primary, opacity: loading || !rawText.trim() ? 0.4 : 1 }}
-          >
+          <button onClick={processSession} disabled={loading || !rawText.trim()} style={{ ...S.primary, opacity: loading || !rawText.trim() ? 0.4 : 1 }}>
             {loading ? "Procesando con IA..." : "Procesar sesión →"}
           </button>
         </div>
       )}
-
       {error && <div style={{ color: "#c47a7a", fontSize: "13px", marginTop: "12px" }}>{error}</div>}
-
       {result && (
         <div style={{ marginTop: "24px" }}>
-          <div style={{ fontSize: "10px", letterSpacing: "0.25em", color: C.accent, textTransform: "uppercase", marginBottom: "20px" }}>
-            Output clínico generado — revisa antes de guardar
-          </div>
-
+          <div style={{ fontSize: "10px", letterSpacing: "0.25em", color: C.accent, textTransform: "uppercase", marginBottom: "20px" }}>Output clínico — revisa antes de guardar</div>
           {[
-            { key: "clinicalSummary", label: "Resumen clínico" },
-            { key: "emerged", label: "Qué emergió en sesión" },
+            { key: "clinical_summary", label: "Resumen clínico" },
+            { key: "emerged", label: "Qué emergió" },
             { key: "patterns", label: "Patrones observados" },
-            { key: "newPatterns", label: "Patrones nuevos detectados" },
-            { key: "updatedHypothesis", label: "Hipótesis actualizada" },
+            { key: "new_patterns", label: "Patrones nuevos" },
+            { key: "updated_hypothesis", label: "Hipótesis actualizada" },
             { key: "task", label: "Tarea para esta semana" },
-            { key: "nextSessionScript", label: "Guión próxima sesión" },
-            { key: "therapeuticWarnings", label: "Señales de alerta clínica" },
-            { key: "notes", label: "Notas clínicas adicionales" },
+            { key: "next_session_script", label: "Guión próxima sesión" },
+            { key: "therapeutic_warnings", label: "Señales de alerta" },
           ].map(({ key, label }) => result[key] && (
             <div key={key} style={{ marginBottom: "16px" }}>
               <label style={S.label}>{label}</label>
-              <div style={{ background: "#0d0d10", border: `1px solid ${C.border}`, padding: "14px", fontSize: "13px", lineHeight: "1.7", color: C.text, whiteSpace: "pre-wrap" }}>
-                {result[key]}
-              </div>
+              <div style={{ background: "#0d0d10", border: `1px solid ${C.border}`, padding: "14px", fontSize: "13px", lineHeight: "1.7", color: C.text, whiteSpace: "pre-wrap" }}>{result[key]}</div>
             </div>
           ))}
-
-          <div style={{ display: "flex", gap: "6px", marginBottom: "16px", flexWrap: "wrap" }}>
-            {result.regulationLevel && <Tag label={`Regulación: ${result.regulationLevel}`} />}
-            {result.stage && <Tag label={`Etapa: ${result.stage}`} />}
-            {result.taskResult && <Tag label={`Tarea anterior: ${result.taskResult}`} />}
-          </div>
-
           <div style={{ display: "flex", gap: "12px", marginTop: "20px" }}>
             <button style={S.ghost} onClick={() => setResult(null)}>Volver a procesar</button>
             <button style={S.primary} onClick={confirmSave}>Guardar en expediente →</button>
@@ -225,16 +168,15 @@ Genera un JSON con exactamente esta estructura (sin texto adicional, sin markdow
   );
 }
 
-// ── NEW PATIENT FORM ──
 function NewPatientForm({ onSave, onCancel }) {
-  const [mode, setMode] = useState("manual"); // manual | import
+  const [mode, setMode] = useState("import");
   const [rawText, setRawText] = useState("");
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
-    name: "", age: "", consultationReason: "", mainDiscomfort: "",
-    predominantPattern: "", regulationLevel: "", automaticThoughts: "",
-    physicalResponses: "", avoidanceBehaviors: "", relevantHistory: "",
-    resources: "", initialHypothesis: "", stage: "Claridad", notes: ""
+    name: "", age: "", consultation_reason: "", main_discomfort: "",
+    predominant_pattern: "", regulation_level: "", automatic_thoughts: "",
+    physical_responses: "", avoidance_behaviors: "", relevant_history: "",
+    resources: "", initial_hypothesis: "", stage: "Claridad", notes: ""
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -244,37 +186,27 @@ function NewPatientForm({ onSave, onCancel }) {
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `Extrae información clínica del siguiente texto y devuelve SOLO un JSON válido sin markdown:
-
-${rawText}
-
-JSON con estos campos exactos:
-{"name":"","age":"","consultationReason":"","mainDiscomfort":"","predominantPattern":"","regulationLevel":"Alta/Media/Baja","automaticThoughts":"","physicalResponses":"","avoidanceBehaviors":"","relevantHistory":"","resources":"","initialHypothesis":"","stage":"Claridad/Comprensión/Regulación/Cambio conductual","notes":""}`
-          }]
+          model: "claude-sonnet-4-20250514", max_tokens: 1000,
+          messages: [{ role: "user", content: `Extrae información clínica y devuelve SOLO un JSON válido sin markdown:\n${rawText}\n\nJSON: {"name":"","age":"","consultation_reason":"","main_discomfort":"","predominant_pattern":"","regulation_level":"Alta/Media/Baja","automatic_thoughts":"","physical_responses":"","avoidance_behaviors":"","relevant_history":"","resources":"","initial_hypothesis":"","stage":"Claridad/Comprensión/Regulación/Cambio conductual","notes":""}` }]
         })
       });
       const data = await res.json();
       const text = data.content?.map(i => i.text || "").join("") || "";
-      const clean = text.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
       setForm(f => ({ ...f, ...parsed }));
       setMode("manual");
     } catch {
-      alert("Error al procesar. Intenta nuevamente.");
+      alert("Error al procesar.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.name.trim()) return;
-    onSave({ ...form, id: Date.now().toString(), createdAt: new Date().toISOString(), sessions: [] });
+    await onSave(form);
   };
 
   return (
@@ -283,122 +215,68 @@ JSON con estos campos exactos:
         <div style={{ fontSize: "10px", letterSpacing: "0.25em", color: C.accent, marginBottom: "8px", textTransform: "uppercase" }}>Nuevo expediente</div>
         <h2 style={{ fontSize: "22px", fontWeight: "400", color: C.text, margin: "0 0 16px" }}>Mapa clínico inicial</h2>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button onClick={() => setMode("import")} style={{ ...S.primary, fontSize: "11px", padding: "8px 18px" }}>
-            Importar desde texto →
-          </button>
-          <button onClick={() => setMode("manual")} style={{ ...S.ghost, fontSize: "11px" }}>
-            Llenar manualmente
-          </button>
+          <button onClick={() => setMode("import")} style={{ ...S.primary, fontSize: "11px", padding: "8px 18px" }}>Importar desde texto →</button>
+          <button onClick={() => setMode("manual")} style={{ ...S.ghost, fontSize: "11px" }}>Llenar manualmente</button>
         </div>
       </div>
-
       {mode === "import" && (
         <div style={{ marginBottom: "28px" }}>
-          <label style={S.label}>Pega aquí la información del paciente (ChatGPT, apuntes, resumen clínico...)</label>
-          <textarea
-            style={{ ...S.input, minHeight: "200px", resize: "vertical", lineHeight: "1.7" }}
-            value={rawText}
-            onChange={e => setRawText(e.target.value)}
-            placeholder="Pega toda la información que tengas — la IA la organiza automáticamente en los campos del expediente..."
-          />
+          <label style={S.label}>Pega aquí la información del paciente</label>
+          <textarea style={{ ...S.input, minHeight: "200px", resize: "vertical", lineHeight: "1.7" }} value={rawText} onChange={e => setRawText(e.target.value)} placeholder="Pega el resumen de ChatGPT, apuntes clínicos o cualquier texto..." />
           <div style={{ display: "flex", gap: "10px", marginTop: "12px" }}>
-            <button style={S.ghost} onClick={() => setMode("manual")}>Cancelar</button>
-            <button
-              onClick={importFromText}
-              disabled={loading || !rawText.trim()}
-              style={{ ...S.primary, opacity: loading || !rawText.trim() ? 0.4 : 1 }}
-            >
+            <button style={S.ghost} onClick={() => setMode("manual")}>Llenar manualmente</button>
+            <button onClick={importFromText} disabled={loading || !rawText.trim()} style={{ ...S.primary, opacity: loading || !rawText.trim() ? 0.4 : 1 }}>
               {loading ? "Procesando..." : "Extraer información →"}
             </button>
           </div>
         </div>
       )}
-
       {mode === "manual" && (
         <>
           <Section title="Identificación">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-              <div>
-                <label style={S.label}>Nombre / Código *</label>
-                <input style={S.input} value={form.name} onChange={e => set("name", e.target.value)} placeholder="Ej: Sara M." />
-              </div>
-              <div>
-                <label style={S.label}>Edad</label>
-                <input style={S.input} value={form.age} onChange={e => set("age", e.target.value)} placeholder="Ej: 21" />
-              </div>
+              <div><label style={S.label}>Nombre *</label><input style={S.input} value={form.name} onChange={e => set("name", e.target.value)} /></div>
+              <div><label style={S.label}>Edad</label><input style={S.input} value={form.age} onChange={e => set("age", e.target.value)} /></div>
             </div>
           </Section>
-
           <Section title="Motivo de consulta">
-            <div style={{ marginBottom: "14px" }}>
-              <label style={S.label}>¿Qué trae al paciente?</label>
-              <textarea style={{ ...S.input, minHeight: "80px", resize: "vertical" }} value={form.consultationReason} onChange={e => set("consultationReason", e.target.value)} placeholder="Lo que expresa el paciente..." />
-            </div>
-            <div>
-              <label style={S.label}>¿Cómo lo vive internamente?</label>
-              <textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.mainDiscomfort} onChange={e => set("mainDiscomfort", e.target.value)} placeholder="Qué hay debajo..." />
-            </div>
+            <div style={{ marginBottom: "14px" }}><label style={S.label}>¿Qué trae al paciente?</label><textarea style={{ ...S.input, minHeight: "80px", resize: "vertical" }} value={form.consultation_reason} onChange={e => set("consultation_reason", e.target.value)} /></div>
+            <div><label style={S.label}>¿Cómo lo vive internamente?</label><textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.main_discomfort} onChange={e => set("main_discomfort", e.target.value)} /></div>
           </Section>
-
           <Section title="Mapa de funcionamiento">
-            <div style={{ marginBottom: "14px" }}>
-              <label style={S.label}>Patrón predominante</label>
-              <select style={{ ...S.input, cursor: "pointer" }} value={form.predominantPattern} onChange={e => set("predominantPattern", e.target.value)}>
-                <option value="">Seleccionar...</option>
-                {PATTERNS.map(p => <option key={p} value={p}>{p}</option>)}
+            <div style={{ marginBottom: "14px" }}><label style={S.label}>Patrón predominante</label>
+              <select style={{ ...S.input, cursor: "pointer" }} value={form.predominant_pattern} onChange={e => set("predominant_pattern", e.target.value)}>
+                <option value="">Seleccionar...</option>{PATTERNS.map(p => <option key={p} value={p}>{p}</option>)}
               </select>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
-              <div>
-                <label style={S.label}>Nivel de regulación</label>
-                <select style={{ ...S.input, cursor: "pointer" }} value={form.regulationLevel} onChange={e => set("regulationLevel", e.target.value)}>
-                  <option value="">Seleccionar...</option>
-                  {REGULATION.map(r => <option key={r} value={r}>{r}</option>)}
+              <div><label style={S.label}>Regulación</label>
+                <select style={{ ...S.input, cursor: "pointer" }} value={form.regulation_level} onChange={e => set("regulation_level", e.target.value)}>
+                  <option value="">Seleccionar...</option>{REGULATION.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
-              <div>
-                <label style={S.label}>Etapa inicial</label>
+              <div><label style={S.label}>Etapa</label>
                 <select style={{ ...S.input, cursor: "pointer" }} value={form.stage} onChange={e => set("stage", e.target.value)}>
                   {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
             </div>
-            <div style={{ marginBottom: "14px" }}>
-              <label style={S.label}>Pensamientos automáticos</label>
-              <textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.automaticThoughts} onChange={e => set("automaticThoughts", e.target.value)} placeholder="Narrativas internas frecuentes..." />
-            </div>
+            <div style={{ marginBottom: "14px" }}><label style={S.label}>Pensamientos automáticos</label><textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.automatic_thoughts} onChange={e => set("automatic_thoughts", e.target.value)} /></div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-              <div>
-                <label style={S.label}>Respuestas corporales</label>
-                <textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.physicalResponses} onChange={e => set("physicalResponses", e.target.value)} />
-              </div>
-              <div>
-                <label style={S.label}>Conductas de evitación</label>
-                <textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.avoidanceBehaviors} onChange={e => set("avoidanceBehaviors", e.target.value)} />
-              </div>
+              <div><label style={S.label}>Respuestas corporales</label><textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.physical_responses} onChange={e => set("physical_responses", e.target.value)} /></div>
+              <div><label style={S.label}>Conductas de evitación</label><textarea style={{ ...S.input, minHeight: "70px", resize: "vertical" }} value={form.avoidance_behaviors} onChange={e => set("avoidance_behaviors", e.target.value)} /></div>
             </div>
           </Section>
-
           <Section title="Historia y recursos">
-            <div style={{ marginBottom: "14px" }}>
-              <label style={S.label}>Historia relevante</label>
-              <textarea style={{ ...S.input, minHeight: "80px", resize: "vertical" }} value={form.relevantHistory} onChange={e => set("relevantHistory", e.target.value)} />
-            </div>
-            <div>
-              <label style={S.label}>Recursos y fortalezas</label>
-              <textarea style={{ ...S.input, minHeight: "60px", resize: "vertical" }} value={form.resources} onChange={e => set("resources", e.target.value)} />
-            </div>
+            <div style={{ marginBottom: "14px" }}><label style={S.label}>Historia relevante</label><textarea style={{ ...S.input, minHeight: "80px", resize: "vertical" }} value={form.relevant_history} onChange={e => set("relevant_history", e.target.value)} /></div>
+            <div><label style={S.label}>Recursos y fortalezas</label><textarea style={{ ...S.input, minHeight: "60px", resize: "vertical" }} value={form.resources} onChange={e => set("resources", e.target.value)} /></div>
           </Section>
-
           <Section title="Hipótesis clínica inicial">
-            <textarea style={{ ...S.input, minHeight: "90px", resize: "vertical" }} value={form.initialHypothesis} onChange={e => set("initialHypothesis", e.target.value)} placeholder="Qué patrón veo, qué sostiene esto, por dónde conviene empezar..." />
+            <textarea style={{ ...S.input, minHeight: "90px", resize: "vertical" }} value={form.initial_hypothesis} onChange={e => set("initial_hypothesis", e.target.value)} />
           </Section>
-
           <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
             <button style={S.ghost} onClick={onCancel}>Cancelar</button>
-            <button style={{ ...S.primary, opacity: form.name.trim() ? 1 : 0.4 }} onClick={handleSave}>
-              Crear expediente →
-            </button>
+            <button style={{ ...S.primary, opacity: form.name.trim() ? 1 : 0.4 }} onClick={handleSave}>Crear expediente →</button>
           </div>
         </>
       )}
@@ -406,7 +284,6 @@ JSON con estos campos exactos:
   );
 }
 
-// ── AI ASSISTANT ──
 function AIAssistant({ patient }) {
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState("");
@@ -414,19 +291,10 @@ function AIAssistant({ patient }) {
 
   const buildContext = () => {
     const sessions = patient.sessions || [];
-    const sessionSummary = sessions.map((s, i) =>
-      `Sesión ${i + 1} (${s.date}): ${s.clinicalSummary || ""} Emergió: ${s.emerged || "—"}. Patrones: ${s.patterns || "—"}. Tarea: ${s.task || "—"}. Resultado: ${s.taskResult || "—"}. Hipótesis actualizada: ${s.updatedHypothesis || "—"}.`
-    ).join("\n");
-    return `EXPEDIENTE — ${patient.name} | Edad: ${patient.age || "—"} | Etapa: ${patient.stage || "—"}
-Motivo: ${patient.consultationReason || "—"}
-Patrón: ${patient.predominantPattern || "—"} | Regulación: ${patient.regulationLevel || "—"}
-Pensamientos automáticos: ${patient.automaticThoughts || "—"}
-Evitación: ${patient.avoidanceBehaviors || "—"}
-Historia: ${patient.relevantHistory || "—"}
-Recursos: ${patient.resources || "—"}
-Hipótesis inicial: ${patient.initialHypothesis || "—"}
-SESIONES (${sessions.length}):
-${sessionSummary || "Sin sesiones."}`;
+    const sessionSummary = sessions.map((s, i) => `Sesión ${i + 1} (${s.date}): Emergió: ${s.emerged || "—"}. Patrones: ${s.patterns || "—"}. Tarea: ${s.task || "—"}.`).join("\n");
+    return `PACIENTE: ${patient.name} | Etapa: ${patient.stage || "—"} | Patrón: ${patient.predominant_pattern || "—"}
+Hipótesis: ${patient.initial_hypothesis || "—"}
+SESIONES:\n${sessionSummary || "Sin sesiones."}`;
   };
 
   const ask = async () => {
@@ -436,29 +304,8 @@ ${sessionSummary || "Sin sesiones."}`;
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `Eres un asistente clínico entrenado en la metodología de esta terapeuta. Tu secuencia es observación → comprensión → cambio. Priorizas patrones sobre diagnósticos. Las tareas tienen objetivo clínico estratégico. Nunca empujas insight de forma invasiva.
-
-LÓGICA CLÍNICA:
-- El patrón que mantiene el malestar es lo más importante
-- Calibras según lo que el paciente puede sostener emocionalmente ahora
-- Distingues siempre: dato vs interpretación vs condena
-- Las tareas interrumpen o revelan el loop, no solo reducen síntomas
-- Paciente racional → tareas corporales/experienciales
-- Paciente desbordado → regulación antes que introspección
-
-${buildContext()}
-
-CONSULTA: ${query}
-
-Responde desde esta metodología. Si hay patrones longitudinales, nómbralos. Si sugieres tareas, explica el objetivo clínico. Máximo 350 palabras. En español.`
-          }]
-        })
+        headers: { "Content-Type": "application/json", "x-api-key": import.meta.env.VITE_ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+        body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, messages: [{ role: "user", content: `Eres asistente clínica especializada en TCC. Secuencia: observación → comprensión → cambio. Priorizas patrones sobre diagnósticos.\n\n${buildContext()}\n\nCONSULTA: ${query}\n\nResponde en español, máximo 350 palabras.` }] })
       });
       const data = await res.json();
       setResponse(data.content?.map(i => i.text || "").join("\n") || "Sin respuesta.");
@@ -470,54 +317,42 @@ Responde desde esta metodología. Si hay patrones longitudinales, nómbralos. Si
   };
 
   const quickQueries = [
-    "¿Qué loop emocional observas en el historial?",
-    "¿Qué tarea se alinea con la etapa actual y el patrón?",
-    "¿Qué narrativa interna sostiene el malestar?",
-    "¿Qué está evitando este paciente y cuál es el costo?",
-    "Genera el guión para la próxima sesión",
-    "¿Qué señales de alerta clínica observas?",
+    "¿Qué loop emocional observas?", "¿Qué tarea sugiere el momento actual?",
+    "¿Qué narrativa sostiene el malestar?", "Genera guión para próxima sesión",
+    "¿Qué señales de alerta observas?",
   ];
 
   return (
     <div>
       <div style={{ marginBottom: "16px" }}>
         <label style={S.label}>Consulta al asistente clínico</label>
-        <textarea style={{ ...S.input, minHeight: "80px", resize: "vertical" }} value={query} onChange={e => setQuery(e.target.value)} placeholder="Pregúntale algo sobre este caso — conoce todo el historial..." />
+        <textarea style={{ ...S.input, minHeight: "80px", resize: "vertical" }} value={query} onChange={e => setQuery(e.target.value)} placeholder="Pregúntale algo sobre este caso..." />
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "16px" }}>
-        {quickQueries.map((q, i) => (
-          <button key={i} onClick={() => setQuery(q)} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.textMuted, padding: "5px 12px", cursor: "pointer", fontSize: "11px", fontFamily: "Georgia, serif" }}>{q}</button>
-        ))}
+        {quickQueries.map((q, i) => <button key={i} onClick={() => setQuery(q)} style={{ background: "transparent", border: `1px solid ${C.border}`, color: C.textMuted, padding: "5px 12px", cursor: "pointer", fontSize: "11px", fontFamily: "Georgia, serif" }}>{q}</button>)}
       </div>
       <button onClick={ask} disabled={loading || !query.trim()} style={{ ...S.primary, opacity: loading || !query.trim() ? 0.4 : 1, marginBottom: "20px" }}>
         {loading ? "Consultando..." : "Consultar →"}
       </button>
-      {response && (
-        <div style={{ background: "#0d0d10", border: `1px solid ${C.border}`, padding: "20px", fontSize: "13px", lineHeight: "1.8", color: C.text, whiteSpace: "pre-wrap" }}>
-          {response}
-        </div>
-      )}
+      {response && <div style={{ background: "#0d0d10", border: `1px solid ${C.border}`, padding: "20px", fontSize: "13px", lineHeight: "1.8", color: C.text, whiteSpace: "pre-wrap" }}>{response}</div>}
     </div>
   );
 }
 
-// ── PATIENT DETAIL ──
 function PatientDetail({ patient, onBack, onUpdate }) {
   const [view, setView] = useState("profile");
   const [addingSession, setAddingSession] = useState(false);
+  const sessions = patient.sessions || [];
 
-  const saveSession = (session) => {
-    const updated = {
-      ...patient,
-      sessions: [...(patient.sessions || []), session],
-      stage: session.stage,
-      regulationLevel: session.regulationLevel || patient.regulationLevel,
-    };
-    onUpdate(updated);
-    setAddingSession(false);
+  const saveSession = async (sessionData) => {
+    const { data, error } = await supabase.from("sessions").insert([sessionData]).select();
+    if (!error && data) {
+      const updated = { ...patient, sessions: [...sessions, data[0]], stage: sessionData.stage };
+      onUpdate(updated);
+      setAddingSession(false);
+    }
   };
 
-  const sessions = patient.sessions || [];
   const tabs = [["profile", "Perfil"], [`sessions`, `Sesiones (${sessions.length})`], ["ai", "Asistente IA"]];
 
   return (
@@ -526,36 +361,29 @@ function PatientDetail({ patient, onBack, onUpdate }) {
         <button onClick={onBack} style={{ ...S.ghost, padding: "6px 12px", fontSize: "11px" }}>← Pacientes</button>
         <div>
           <h2 style={{ fontSize: "20px", fontWeight: "400", color: C.text, margin: 0 }}>{patient.name}</h2>
-          <div style={{ fontSize: "12px", color: C.textMuted, marginTop: "2px" }}>
-            {patient.age && `${patient.age} años · `}{sessions.length} sesiones · Etapa: {patient.stage}
-          </div>
+          <div style={{ fontSize: "12px", color: C.textMuted, marginTop: "2px" }}>{patient.age && `${patient.age} años · `}{sessions.length} sesiones · Etapa: {patient.stage}</div>
         </div>
       </div>
-
       <div style={{ display: "flex", borderBottom: `1px solid ${C.border}`, marginBottom: "28px" }}>
         {tabs.map(([id, label]) => (
           <button key={id} onClick={() => setView(id)} style={{ background: "transparent", border: "none", borderBottom: view === id ? `2px solid ${C.accent}` : "2px solid transparent", color: view === id ? C.accent : C.textMuted, padding: "10px 20px", cursor: "pointer", fontSize: "12px", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "Georgia, serif", marginBottom: "-1px" }}>{label}</button>
         ))}
       </div>
-
       {view === "profile" && (
         <div>
-          {patient.consultationReason && <Section title="Motivo de consulta"><p style={{ color: C.text, fontSize: "14px", lineHeight: "1.7", margin: 0 }}>{patient.consultationReason}</p>{patient.mainDiscomfort && <p style={{ color: C.textMuted, fontSize: "13px", lineHeight: "1.7", marginTop: "10px" }}>{patient.mainDiscomfort}</p>}</Section>}
+          {patient.consultation_reason && <Section title="Motivo de consulta"><p style={{ color: C.text, fontSize: "14px", lineHeight: "1.7", margin: 0 }}>{patient.consultation_reason}</p></Section>}
           <Section title="Mapa de funcionamiento">
             <div style={{ display: "flex", flexWrap: "wrap", marginBottom: "16px" }}>
-              {patient.predominantPattern && <Tag label={patient.predominantPattern} />}
+              {patient.predominant_pattern && <Tag label={patient.predominant_pattern} />}
               {patient.stage && <Tag label={patient.stage} />}
-              {patient.regulationLevel && <Tag label={`Regulación ${patient.regulationLevel}`} />}
+              {patient.regulation_level && <Tag label={`Regulación ${patient.regulation_level}`} />}
             </div>
-            {patient.automaticThoughts && <div style={{ marginBottom: "12px" }}><div style={S.label}>Pensamientos automáticos</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.7", margin: 0 }}>{patient.automaticThoughts}</p></div>}
-            {patient.avoidanceBehaviors && <div><div style={S.label}>Conductas de evitación</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.7", margin: 0 }}>{patient.avoidanceBehaviors}</p></div>}
+            {patient.automatic_thoughts && <div style={{ marginBottom: "12px" }}><div style={S.label}>Pensamientos automáticos</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.7", margin: 0 }}>{patient.automatic_thoughts}</p></div>}
+            {patient.avoidance_behaviors && <div><div style={S.label}>Conductas de evitación</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.7", margin: 0 }}>{patient.avoidance_behaviors}</p></div>}
           </Section>
-          {patient.relevantHistory && <Section title="Historia relevante"><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.7", margin: 0 }}>{patient.relevantHistory}</p></Section>}
-          {patient.resources && <Section title="Recursos y fortalezas"><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.7", margin: 0 }}>{patient.resources}</p></Section>}
-          {patient.initialHypothesis && <Section title="Hipótesis clínica inicial"><p style={{ color: C.text, fontSize: "14px", lineHeight: "1.8", margin: 0, fontStyle: "italic", borderLeft: `2px solid ${C.accent}`, paddingLeft: "16px" }}>{patient.initialHypothesis}</p></Section>}
+          {patient.initial_hypothesis && <Section title="Hipótesis clínica"><p style={{ color: C.text, fontSize: "14px", lineHeight: "1.8", margin: 0, fontStyle: "italic", borderLeft: `2px solid ${C.accent}`, paddingLeft: "16px" }}>{patient.initial_hypothesis}</p></Section>}
         </div>
       )}
-
       {view === "sessions" && (
         <div>
           {addingSession ? (
@@ -566,26 +394,17 @@ function PatientDetail({ patient, onBack, onUpdate }) {
                 <button style={S.primary} onClick={() => setAddingSession(true)}>+ Registrar sesión</button>
               </div>
               {sessions.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "40px", color: C.textMuted, fontSize: "14px" }}>Sin sesiones registradas aún.</div>
+                <div style={{ textAlign: "center", padding: "40px", color: C.textMuted }}>Sin sesiones registradas aún.</div>
               ) : (
                 [...sessions].reverse().map((s, i) => (
                   <div key={s.id} style={{ border: `1px solid ${C.border}`, padding: "20px", marginBottom: "12px", background: C.surface }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-                      <div>
-                        <span style={{ fontSize: "13px", color: C.text }}>Sesión {sessions.length - i}</span>
-                        <span style={{ fontSize: "11px", color: C.textMuted, marginLeft: "12px" }}>{s.date}</span>
-                      </div>
-                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                        <Tag label={s.stage} />
-                        {s.taskResult && <Tag label={s.taskResult} />}
-                      </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px" }}>
+                      <span style={{ fontSize: "13px", color: C.text }}>Sesión {sessions.length - i} · {s.date}</span>
+                      <div style={{ display: "flex", gap: "6px" }}><Tag label={s.stage} />{s.task_result && <Tag label={s.task_result} />}</div>
                     </div>
-                    {s.clinicalSummary && <div style={{ marginBottom: "10px" }}><div style={S.label}>Resumen clínico</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.6", margin: 0, fontStyle: "italic" }}>{s.clinicalSummary}</p></div>}
-                    {s.emerged && <div style={{ marginBottom: "10px" }}><div style={S.label}>Emergió en sesión</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.emerged}</p></div>}
-                    {s.newPatterns && <div style={{ marginBottom: "10px" }}><div style={S.label}>Patrones nuevos</div><p style={{ color: C.textMuted, fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.newPatterns}</p></div>}
-                    {s.task && <div style={{ marginBottom: "10px" }}><div style={S.label}>Tarea asignada</div><p style={{ color: C.accent, fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.task}</p></div>}
-                    {s.nextSessionScript && <div style={{ marginBottom: "10px" }}><div style={S.label}>Guión próxima sesión</div><p style={{ color: C.textMuted, fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.nextSessionScript}</p></div>}
-                    {s.therapeuticWarnings && <div style={{ padding: "10px 14px", background: "#1a1010", border: `1px solid #3a2020`, marginTop: "8px" }}><div style={{ ...S.label, color: "#c47a7a" }}>⚠ Señales de alerta</div><p style={{ color: "#c47a7a", fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.therapeuticWarnings}</p></div>}
+                    {s.emerged && <div style={{ marginBottom: "10px" }}><div style={S.label}>Emergió</div><p style={{ color: C.text, fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.emerged}</p></div>}
+                    {s.task && <div style={{ marginBottom: "10px" }}><div style={S.label}>Tarea</div><p style={{ color: C.accent, fontSize: "13px", lineHeight: "1.6", margin: 0 }}>{s.task}</p></div>}
+                    {s.notes && <div><div style={S.label}>Notas</div><p style={{ color: C.textMuted, fontSize: "13px", lineHeight: "1.6", margin: 0, whiteSpace: "pre-wrap" }}>{s.notes}</p></div>}
                   </div>
                 ))
               )}
@@ -593,20 +412,49 @@ function PatientDetail({ patient, onBack, onUpdate }) {
           )}
         </div>
       )}
-
       {view === "ai" && <AIAssistant patient={patient} />}
     </div>
   );
 }
 
-// ── MAIN ──
 export default function App() {
   const [patients, setPatients] = useState([]);
   const [view, setView] = useState("list");
   const [selected, setSelected] = useState(null);
+  const [loadingPatients, setLoadingPatients] = useState(true);
 
-  const addPatient = (p) => { setPatients(ps => [...ps, p]); setView("list"); };
-  const updatePatient = (u) => { setPatients(ps => ps.map(p => p.id === u.id ? u : p)); setSelected(u); };
+  useEffect(() => {
+    loadPatients();
+  }, []);
+
+  const loadPatients = async () => {
+    setLoadingPatients(true);
+    const { data: patientsData } = await supabase.from("patients").select("*").order("created_at", { ascending: false });
+    if (patientsData) {
+      const patientsWithSessions = await Promise.all(
+        patientsData.map(async (p) => {
+          const { data: sessions } = await supabase.from("sessions").select("*").eq("patient_id", p.id).order("session_number", { ascending: true });
+          return { ...p, sessions: sessions || [] };
+        })
+      );
+      setPatients(patientsWithSessions);
+    }
+    setLoadingPatients(false);
+  };
+
+  const addPatient = async (formData) => {
+    const { data, error } = await supabase.from("patients").insert([formData]).select();
+    if (!error && data) {
+      setPatients(ps => [{ ...data[0], sessions: [] }, ...ps]);
+      setView("list");
+    }
+  };
+
+  const updatePatient = (updated) => {
+    setPatients(ps => ps.map(p => p.id === updated.id ? updated : p));
+    setSelected(updated);
+  };
+
   const openPatient = (p) => { setSelected(p); setView("detail"); };
 
   return (
@@ -620,13 +468,14 @@ export default function App() {
         </div>
         {view === "list" && <button style={S.primary} onClick={() => setView("new")}>+ Nuevo paciente</button>}
       </div>
-
       <div style={{ padding: "40px 32px" }}>
         {view === "new" && <NewPatientForm onSave={addPatient} onCancel={() => setView("list")} />}
         {view === "detail" && selected && <PatientDetail patient={selected} onBack={() => setView("list")} onUpdate={updatePatient} />}
         {view === "list" && (
           <div style={{ maxWidth: "760px", margin: "0 auto" }}>
-            {patients.length === 0 ? (
+            {loadingPatients ? (
+              <div style={{ textAlign: "center", padding: "80px", color: C.textMuted }}>Cargando expedientes...</div>
+            ) : patients.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 20px" }}>
                 <div style={{ fontSize: "10px", letterSpacing: "0.25em", color: C.textDim, textTransform: "uppercase", marginBottom: "16px" }}>Sin expedientes</div>
                 <p style={{ color: C.textMuted, fontSize: "14px", marginBottom: "28px", lineHeight: "1.7" }}>Crea el primer expediente clínico<br />o importa la información desde texto.</p>
@@ -634,9 +483,7 @@ export default function App() {
               </div>
             ) : (
               <>
-                <div style={{ fontSize: "10px", letterSpacing: "0.2em", color: C.textMuted, textTransform: "uppercase", marginBottom: "20px" }}>
-                  {patients.length} expediente{patients.length !== 1 ? "s" : ""}
-                </div>
+                <div style={{ fontSize: "10px", letterSpacing: "0.2em", color: C.textMuted, textTransform: "uppercase", marginBottom: "20px" }}>{patients.length} expediente{patients.length !== 1 ? "s" : ""}</div>
                 {patients.map(p => (
                   <div key={p.id} onClick={() => openPatient(p)}
                     style={{ border: `1px solid ${C.border}`, padding: "20px 24px", marginBottom: "10px", cursor: "pointer", background: C.surface, display: "flex", justifyContent: "space-between", alignItems: "center" }}
@@ -646,9 +493,9 @@ export default function App() {
                     <div>
                       <div style={{ fontSize: "15px", color: C.text, marginBottom: "6px" }}>{p.name}</div>
                       <div style={{ display: "flex", flexWrap: "wrap" }}>
-                        {p.predominantPattern && <Tag label={p.predominantPattern} />}
+                        {p.predominant_pattern && <Tag label={p.predominant_pattern} />}
                         {p.stage && <Tag label={p.stage} />}
-                        {p.regulationLevel && <Tag label={`Regulación ${p.regulationLevel}`} />}
+                        {p.regulation_level && <Tag label={`Regulación ${p.regulation_level}`} />}
                       </div>
                     </div>
                     <div style={{ textAlign: "right", flexShrink: 0, marginLeft: "16px" }}>
@@ -662,9 +509,8 @@ export default function App() {
           </div>
         )}
       </div>
-
       <div style={{ borderTop: `1px solid ${C.border}`, padding: "16px 32px", display: "flex", justifyContent: "space-between" }}>
-        <span style={{ fontSize: "11px", color: C.textDim, letterSpacing: "0.1em" }}>CONTINUUM™ — Herramientas clínicas para psicólogos</span>
+        <span style={{ fontSize: "11px", color: C.textDim }}>CONTINUUM™ — Herramientas clínicas para psicólogos</span>
         <span style={{ fontSize: "11px", color: C.textDim }}>Diseñado desde la psicología</span>
       </div>
     </div>
